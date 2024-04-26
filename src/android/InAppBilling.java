@@ -124,7 +124,7 @@ public class InAppBilling extends CordovaPlugin {
         InputStream inputStream = null;
         Context context = this.cordova.getActivity();
         try {
-            inputStream = context.getAssets().open(path + "/manifest.json");
+            inputStream = context.getAssets().open(path + "/config.json");
         } catch (IOException e) {
             if (iabHelper != null) iabHelper.logInfo("Can not load manifest file on path: " + path + "/manifest.json");
         }
