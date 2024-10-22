@@ -18,22 +18,22 @@
   <keywords>cordova,plugin,in-app-purchases,inapppurchases,inapppurchase,subscription,app,ios,android,ecosystem:cordova,purchase,purchases,cordova-android,cordova-ios,payments,in,app,promise,promises,android,ios,itunes,google,play,ionic,phonegap,storekit,appstore</keywords>
 
   <platform name="ios">
-    <js-module src="www/billing-ios.js" name="PaymentsPlugin">
-      <clobbers target="inAppPurchases" />
-    </js-module>
+      <js-module src="www/billing-ios.js" name="PaymentsPlugin">
+          <clobbers target="inAppPurchases" />
+      </js-module>
 
-    <config-file target="config.xml" parent="/*">
-      <feature name="PaymentsPlugin">
-        <param name="ios-package" value="PaymentsPlugin"/>
-      </feature>
-    </config-file>
-    
-    <header-file src="src/ios/RMStore.h" />
-    <source-file src="src/ios/RMStore.m" />
-    <header-file src="src/ios/PaymentsPlugin.h" />
-    <source-file src="src/ios/PaymentsPlugin.m" />
+      <config-file target="config.xml" parent="/*">
+          <feature name="PaymentsPlugin">
+              <param name="ios-package" value="PaymentsPlugin"/>
+          </feature>
+      </config-file>
 
-    <framework src="StoreKit.framework" />
+      <header-file src="src/ios/PaymentsPlugin.h" />
+      <source-file src="src/ios/PaymentsPlugin.m" />
+      <header-file src="src/ios/StoreKit2Manager.h" />
+      <source-file src="src/ios/StoreKit2Manager.m" />
+
+      <framework src="StoreKit.framework" />
   </platform>
 
   <platform name="android">
