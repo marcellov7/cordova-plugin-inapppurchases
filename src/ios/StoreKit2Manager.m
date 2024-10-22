@@ -1,272 +1,211 @@
+#import "PaymentsPlugin.h"
 #import "StoreKit2Manager.h"
-#import <StoreKit/StoreKit.h>
 
-@interface StoreKit2Manager () <SKPaymentTransactionObserver>
-@property (nonatomic, strong) NSHashTable *transactionObservers;
-@property (nonatomic, strong) NSMutableDictionary *purchaseCallbacks;
+@interface PaymentsPlugin() <SKPaymentTransactionObserver>
 @end
 
-@implementation StoreKit2Manager
+@implementation PaymentsPlugin
 
-+ (instancetype)sharedInstance {
-    static StoreKit2Manager *sharedInstance = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sharedInstance = [[self alloc] init];
-    });
-    return sharedInstance;
-}
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _transactionObservers = [NSHashTable weakObjectsHashTable];
-        _purchaseCallbacks = [NSMutableDictionary new];
-        [[SKPaymentQueue defaultQueue] addTransactionObserver:self];
-    }
-    return self;
+- (void)pluginInitialize {
+    [[StoreKit2Manager sharedInstance] addTransactionObserver:self];
 }
 
 - (void)dealloc {
-    [[SKPaymentQueue defaultQueue] removeTransactionObserver:self];
+    [[StoreKit2Manager sharedInstance] removeTransactionObserver:self];
 }
 
-#pragma mark - Product Methods
+#pragma mark - Public Methods
 
-- (void)requestProductsWithIdentifiers:(NSSet<NSString *>*)identifiers
-                             success:(void (^)(NSArray *products, NSArray *invalidIdentifiers))successBlock
-                             failure:(void (^)(NSError *error))failureBlock {
-    if (@available(iOS 15.0, *)) {
-        [self requestProducts_SK2:identifiers success:successBlock failure:failureBlock];
-    } else {
-        [self requestProducts_SK1:identifiers success:successBlock failure:failureBlock];
-    }
-}
-
-- (void)requestProducts_SK2:(NSSet<NSString *>*)identifiers
-                   success:(void (^)(NSArray *products, NSArray *invalidIdentifiers))successBlock
-                   failure:(void (^)(NSError *error))failureBlock API_AVAILABLE(ios(15.0)) {
-    
-    [SKProduct productsWithIdentifiers:identifiers completionHandler:^(NSArray<SKProduct *> *products, NSError *error) {
-        if (error) {
-            if (failureBlock) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    failureBlock(error);
-                });
-            }
-            return;
-        }
-        
-        NSMutableArray *invalidIdentifiers = [NSMutableArray array];
-        for (NSString *identifier in identifiers) {
-            BOOL found = NO;
-            for (SKProduct *product in products) {
-                if ([product.productIdentifier isEqualToString:identifier]) {
-                    found = YES;
-                    break;
-                }
-            }
-            if (!found) {
-                [invalidIdentifiers addObject:identifier];
-            }
-        }
-        
-        if (successBlock) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                successBlock(products, invalidIdentifiers);
-            });
-        }
-    }];
-}
-
-- (void)requestProducts_SK1:(NSSet<NSString *>*)identifiers
-                   success:(void (^)(NSArray *products, NSArray *invalidIdentifiers))successBlock
-                   failure:(void (^)(NSError *error))failureBlock {
-    SKProductsRequest *request = [[SKProductsRequest alloc] initWithProductIdentifiers:identifiers];
-    request.delegate = self;
-    [request start];
-}
-
-#pragma mark - Purchase Methods
-
-- (void)purchaseProduct:(NSString *)productIdentifier
-                success:(void (^)(SKPaymentTransaction *transaction, NSString *receipt))successBlock
-                failure:(void (^)(NSError *error))failureBlock {
-    
-    if (@available(iOS 15.0, *)) {
-        [self purchaseProduct_SK2:productIdentifier success:successBlock failure:failureBlock];
-    } else {
-        [self purchaseProduct_SK1:productIdentifier success:successBlock failure:failureBlock];
-    }
-}
-
-- (void)purchaseProduct_SK2:(NSString *)productIdentifier
-                   success:(void (^)(SKPaymentTransaction *transaction, NSString *receipt))successBlock
-                   failure:(void (^)(NSError *error))failureBlock API_AVAILABLE(ios(15.0)) {
-    
-    [SKProduct productsWithIdentifiers:[NSSet setWithObject:productIdentifier] completionHandler:^(NSArray<SKProduct *> *products, NSError *error) {
-        if (error || products.count == 0) {
-            if (failureBlock) {
-                NSError *productError = error ?: [NSError errorWithDomain:@"StoreKit2ManagerError" 
-                                                                   code:100 
-                                                               userInfo:@{NSLocalizedDescriptionKey: @"Product not found"}];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    failureBlock(productError);
-                });
-            }
-            return;
-        }
-        
-        SKProduct *product = products.firstObject;
-        SKPayment *payment = [SKPayment paymentWithProduct:product];
-        
-        // Store callback for later use
-        self.purchaseCallbacks[productIdentifier] = @{
-            @"success": successBlock,
-            @"failure": failureBlock
-        };
-        
-        [[SKPaymentQueue defaultQueue] addPayment:payment];
-    }];
-}
-
-- (void)purchaseProduct_SK1:(NSString *)productIdentifier
-                   success:(void (^)(SKPaymentTransaction *transaction, NSString *receipt))successBlock
-                   failure:(void (^)(NSError *error))failureBlock {
-    
-    SKProduct *product = [self cachedProductForIdentifier:productIdentifier];
-    if (!product) {
-        if (failureBlock) {
-            NSError *error = [NSError errorWithDomain:@"StoreKit2ManagerError" 
-                                               code:100 
-                                           userInfo:@{NSLocalizedDescriptionKey: @"Product not found"}];
-            failureBlock(error);
-        }
+- (void)billingGetAllProductInfo:(CDVInvokedUrlCommand *)command {
+    id productIds = [command.arguments objectAtIndex:0];
+    if (![productIds isKindOfClass:[NSArray class]]) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                                        messageAsString:@"ProductIds must be an array of strings"];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
     
-    SKPayment *payment = [SKPayment paymentWithProduct:product];
-    
-    // Store callback for later use
-    self.purchaseCallbacks[productIdentifier] = @{
-        @"success": successBlock,
-        @"failure": failureBlock
-    };
-    
-    [[SKPaymentQueue defaultQueue] addPayment:payment];
+    NSSet *products = [NSSet setWithArray:productIds];
+    [[StoreKit2Manager sharedInstance] requestProductsWithIdentifiers:products 
+                                                            success:^(NSArray *products, NSArray *invalidProductIdentifiers) {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        NSMutableArray *validProducts = [NSMutableArray array];
+        
+        for (SKProduct *product in products) {
+            NSString *country = [product.priceLocale objectForKey:NSLocaleCountryCode];
+            NSString *currencyCode = [product.priceLocale objectForKey:NSLocaleCurrencyCode];
+            
+            NSNumber *isIntroductoryPriceSupported = @0;
+            NSDictionary *introductoryPriceInfo = nil;
+            
+            if (@available(iOS 11.2, *)) {
+                isIntroductoryPriceSupported = @1;
+                if (product.introductoryPrice) {
+                    SKProductDiscount *ip = product.introductoryPrice;
+                    NSLocale *ipPriceLocale = ip.priceLocale ?: product.priceLocale;
+                    NSNumberFormatter *formatter = [[NSNumberFormatter alloc] init];
+                    formatter.numberStyle = NSNumberFormatterCurrencyStyle;
+                    formatter.locale = ipPriceLocale;
+                    
+                    introductoryPriceInfo = @{
+                        @"price": [formatter stringFromNumber:ip.price],
+                        @"priceRaw": [ip.price stringValue],
+                        @"country": [ipPriceLocale objectForKey:NSLocaleCountryCode],
+                        @"currency": [ipPriceLocale objectForKey:NSLocaleCurrencyCode],
+                        @"paymentMode": @(ip.paymentMode),
+                        @"numberOfPeriods": @(ip.numberOfPeriods),
+                        @"subscriptionPeriod": @{
+                            @"unit": @(ip.subscriptionPeriod.unit),
+                            @"numberOfUnits": @(ip.subscriptionPeriod.numberOfUnits),
+                        }
+                    };
+                }
+            }
+            
+            NSNumberFormatter *priceFormatter = [[NSNumberFormatter alloc] init];
+            priceFormatter.numberStyle = NSNumberFormatterCurrencyStyle;
+            priceFormatter.locale = product.priceLocale;
+            
+            [validProducts addObject:@{
+                @"productId": product.productIdentifier,
+                @"title": product.localizedTitle,
+                @"description": product.localizedDescription,
+                @"price": [priceFormatter stringFromNumber:product.price],
+                @"priceAsDecimal": product.price,
+                @"priceRaw": [product.price stringValue],
+                @"country": country,
+                @"currency": currencyCode,
+                @"introductoryPrice": introductoryPriceInfo ?: [NSNull null],
+                @"introductoryPriceSupported": isIntroductoryPriceSupported
+            }];
+        }
+        
+        [result setObject:validProducts forKey:@"products"];
+        [result setObject:invalidProductIdentifiers forKey:@"invalidProductsIds"];
+        
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK 
+                                                      messageAsDictionary:result];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    } failure:^(NSError *error) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                                      messageAsDictionary:@{
+            @"code": @(error.code),
+            @"message": error.localizedDescription
+        }];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }];
 }
 
-#pragma mark - Restore Purchases
-
-- (void)restorePurchases:(void (^)(NSArray *transactions))successBlock
-                failure:(void (^)(NSError *error))failureBlock {
-    if (@available(iOS 15.0, *)) {
-        [self restorePurchases_SK2:successBlock failure:failureBlock];
-    } else {
-        [self restorePurchases_SK1:successBlock failure:failureBlock];
+- (void)billingPurchase:(CDVInvokedUrlCommand *)command {
+    id productId = [command.arguments objectAtIndex:0];
+    if (![productId isKindOfClass:[NSString class]]) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                                        messageAsString:@"ProductId must be a string"];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
     }
+    
+    [[StoreKit2Manager sharedInstance] purchaseProduct:productId 
+                                             success:^(SKPaymentTransaction *transaction, NSString *receipt) {
+        NSNumber *pending = @(transaction.transactionState != SKPaymentTransactionStatePurchased && 
+                            transaction.transactionState != SKPaymentTransactionStateRestored);
+        
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK 
+                                                      messageAsDictionary:@{
+            @"receipt": receipt ?: [NSNull null],
+            @"productId": transaction.payment.productIdentifier,
+            @"purchaseId": transaction.transactionIdentifier ?: [NSNull null],
+            @"purchaseTime": @((NSInteger)transaction.transactionDate.timeIntervalSince1970),
+            @"pending": pending,
+            @"quantity": @(transaction.payment.quantity),
+            @"verified": @0,
+            @"completed": @(pending.intValue != 1)
+        }];
+        
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    } failure:^(NSError *error) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                                      messageAsDictionary:@{
+            @"code": @(error.code),
+            @"message": error.localizedDescription
+        }];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }];
 }
 
-- (void)restorePurchases_SK2:(void (^)(NSArray *transactions))successBlock
-                    failure:(void (^)(NSError *error))failureBlock API_AVAILABLE(ios(15.0)) {
-    [[SKPaymentQueue defaultQueue] restoreCompletedTransactionsWithApplicationUsername:nil];
-    // Callbacks will be handled through the transaction observer
+- (void)billingRestorePurchases:(CDVInvokedUrlCommand *)command {
+    [[StoreKit2Manager sharedInstance] restorePurchases:^(NSArray *transactions) {
+        NSMutableArray *validTransactions = [NSMutableArray array];
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        
+        for (SKPaymentTransaction *transaction in transactions) {
+            if (transaction.transactionState != SKPaymentTransactionStateFailed) {
+                NSNumber *pending = @(transaction.transactionState != SKPaymentTransactionStatePurchased && 
+                                   transaction.transactionState != SKPaymentTransactionStateRestored);
+                
+                [validTransactions addObject:@{
+                    @"productId": transaction.payment.productIdentifier,
+                    @"purchaseId": transaction.transactionIdentifier ?: [NSNull null],
+                    @"purchaseTime": @((NSInteger)transaction.transactionDate.timeIntervalSince1970),
+                    @"pending": pending,
+                    @"quantity": @(transaction.payment.quantity),
+                    @"verified": @0,
+                    @"completed": @(pending.intValue != 1)
+                }];
+            }
+        }
+        
+        [result setObject:validTransactions forKey:@"transactions"];
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK 
+                                                      messageAsDictionary:result];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    } failure:^(NSError *error) {
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                                      messageAsDictionary:@{
+            @"code": @(error.code),
+            @"message": error.localizedDescription
+        }];
+        [pluginResult setKeepCallbackAsBool:YES];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    }];
 }
 
-- (void)restorePurchases_SK1:(void (^)(NSArray *transactions))successBlock
-                    failure:(void (^)(NSError *error))failureBlock {
-    [[SKPaymentQueue defaultQueue] restoreCompletedTransactions];
-    // Callbacks will be handled through the transaction observer
-}
-
-#pragma mark - Receipt Handling
-
-- (NSString *)getReceipt {
-    NSURL *receiptURL = [[NSBundle mainBundle] appStoreReceiptURL];
-    NSData *receiptData = [NSData dataWithContentsOfURL:receiptURL];
-    return [receiptData base64EncodedStringWithOptions:0];
-}
-
-#pragma mark - Transaction Verification
-
-- (void)verifyPurchase:(SKPaymentTransaction *)transaction
-              success:(void (^)(BOOL verified))successBlock
-              failure:(void (^)(NSError *error))failureBlock {
-    if (@available(iOS 15.0, *)) {
-        [self verifyPurchase_SK2:transaction success:successBlock failure:failureBlock];
-    } else {
-        // Basic verification for SK1
-        successBlock(YES);
-    }
-}
-
-- (void)verifyPurchase_SK2:(SKPaymentTransaction *)transaction
-                  success:(void (^)(BOOL verified))successBlock
-                  failure:(void (^)(NSError *error))failureBlock API_AVAILABLE(ios(15.0)) {
-    // Implement your server-side verification here
-    // For now, we'll just return success
-    successBlock(YES);
-}
-
-#pragma mark - Transaction Monitoring
-
-- (void)startTransactionMonitoring {
-    // Already started in init
-}
-
-- (void)stopTransactionMonitoring {
-    [[SKPaymentQueue defaultQueue] removeTransactionObserver:self];
-}
-
-- (void)addTransactionObserver:(id<SKPaymentTransactionObserver>)observer {
-    [self.transactionObservers addObject:observer];
-}
-
-- (void)removeTransactionObserver:(id<SKPaymentTransactionObserver>)observer {
-    [self.transactionObservers removeObject:observer];
+- (void)billingGetReceipt:(CDVInvokedUrlCommand *)command {
+    NSString *receipt = [[StoreKit2Manager sharedInstance] getReceipt];
+    CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK 
+                                                  messageAsDictionary:@{
+        @"receipt": receipt ?: [NSNull null]
+    }];
+    [pluginResult setKeepCallbackAsBool:YES];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 #pragma mark - SKPaymentTransactionObserver
 
 - (void)paymentQueue:(SKPaymentQueue *)queue updatedTransactions:(NSArray<SKPaymentTransaction *> *)transactions {
     for (SKPaymentTransaction *transaction in transactions) {
-        [self handleTransaction:transaction];
-    }
-}
-
-- (void)handleTransaction:(SKPaymentTransaction *)transaction {
-    NSString *productId = transaction.payment.productIdentifier;
-    NSDictionary *callbacks = self.purchaseCallbacks[productId];
-    void (^successBlock)(SKPaymentTransaction *, NSString *) = callbacks[@"success"];
-    void (^failureBlock)(NSError *) = callbacks[@"failure"];
-    
-    switch (transaction.transactionState) {
-        case SKPaymentTransactionStatePurchased:
-        case SKPaymentTransactionStateRestored: {
-            if (successBlock) {
-                NSString *receipt = [self getReceipt];
-                successBlock(transaction, receipt);
-            }
-            [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
-            [self.purchaseCallbacks removeObjectForKey:productId];
-            break;
-        }
-        case SKPaymentTransactionStateFailed: {
-            if (failureBlock) {
-                failureBlock(transaction.error);
-            }
-            [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
-            [self.purchaseCallbacks removeObjectForKey:productId];
-            break;
-        }
-        default:
-            break;
-    }
-    
-    // Notify observers
-    for (id<SKPaymentTransactionObserver> observer in self.transactionObservers) {
-        if ([observer respondsToSelector:@selector(paymentQueue:updatedTransactions:)]) {
-            [observer paymentQueue:queue updatedTransactions:@[transaction]];
+        if (transaction.transactionState == SKPaymentTransactionStatePurchased ||
+            transaction.transactionState == SKPaymentTransactionStateRestored) {
+            
+            [[StoreKit2Manager sharedInstance] verifyPurchase:transaction 
+                                                     success:^(BOOL verified) {
+                if (verified) {
+                    NSString *js = [NSString stringWithFormat:@"cordova.fireDocumentEvent('transactionfinished', %@);",
+                                  @{@"productId": transaction.payment.productIdentifier,
+                                    @"transactionId": transaction.transactionIdentifier ?: [NSNull null],
+                                    @"receipt": [[StoreKit2Manager sharedInstance] getReceipt] ?: @""}];
+                    [self.commandDelegate evalJs:js];
+                }
+            } failure:^(NSError *error) {
+                NSLog(@"Purchase verification failed: %@", error);
+            }];
         }
     }
 }
